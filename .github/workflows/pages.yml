@@ -1,0 +1,52 @@
+name: Publish textbook website
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: true
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract verified public website
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path, PurePosixPath
+          from zipfile import ZipFile
+          output = Path('site-dist')
+          output.mkdir(exist_ok=True)
+          with ZipFile('site-public.zip') as archive:
+              for member in archive.infolist():
+                  name = PurePosixPath(member.filename)
+                  if member.is_dir():
+                      continue
+                  if name.is_absolute() or '..' in name.parts:
+                      raise ValueError('Unsafe archive path')
+                  if name.suffix.lower() in {'.pdf', '.md', '.py', '.zip', '.map'}:
+                      raise ValueError('Unexpected source or document in public website')
+                  target = output.joinpath(*name.parts)
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  target.write_bytes(archive.read(member))
+          assert (output/'index.html').is_file()
+          import json, os
+          (output/'version.json').write_text(json.dumps({'artifact_commit': os.environ['GITHUB_SHA']}), encoding='utf-8')
+          PY
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site-dist
+  deploy:
+    needs: prepare
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
